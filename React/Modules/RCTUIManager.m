@@ -327,39 +327,46 @@ static NSDictionary *deviceOrientationEventBody(UIDeviceOrientation orientation)
   return _shadowViewRegistry[reactTag];
 }
 
-- (void)setAvailableSize:(CGSize)availableSize forRootView:(UIView *)rootView
+- (void)_executeBlockWithShadowView:(void (^)(RCTShadowView *shadowView))block forTag:(NSNumber *)tag
 {
   RCTAssertMainQueue();
-  NSNumber *reactTag = rootView.reactTag;
-  RCTExecuteOnUIManagerQueue(^{
-    RCTRootShadowView *shadowView = (RCTRootShadowView *)self->_shadowViewRegistry[reactTag];
-    RCTAssert(shadowView != nil, @"Could not locate shadow view with tag #%@", reactTag);
-    RCTAssert([shadowView isKindOfClass:[RCTRootShadowView class]], @"Located shadow view (with tag #%@) is actually not root view.", reactTag);
 
-    if (CGSizeEqualToSize(availableSize, shadowView.availableSize)) {
+  RCTExecuteOnUIManagerQueue(^{
+    RCTShadowView *shadowView = self->_shadowViewRegistry[tag];
+
+    if (shadowView == nil) {
+      RCTLogInfo(@"Could not locate shadow view with tag #%@, this is probably caused by a temporary inconsistency between native views and shadow views.", tag);
       return;
     }
 
-    shadowView.availableSize = availableSize;
-    [self setNeedsLayout];
+    block(shadowView);
   });
+}
+
+- (void)setAvailableSize:(CGSize)availableSize forRootView:(UIView *)rootView
+{
+  RCTAssertMainQueue();
+  [self _executeBlockWithShadowView:^(RCTShadowView *shadowView) {
+    RCTAssert([shadowView isKindOfClass:[RCTRootShadowView class]], @"Located shadow view is actually not root view.");
+
+    RCTRootShadowView *rootShadowView = (RCTRootShadowView *)shadowView;
+
+    if (CGSizeEqualToSize(availableSize, rootShadowView.availableSize)) {
+      return;
+    }
+
+    rootShadowView.availableSize = availableSize;
+    [self setNeedsLayout];
+  } forTag:rootView.reactTag];
 }
 
 - (void)setLocalData:(NSObject *)localData forView:(UIView *)view
 {
   RCTAssertMainQueue();
-  NSNumber *tag = view.reactTag;
-
-  RCTExecuteOnUIManagerQueue(^{
-    RCTShadowView *shadowView = self->_shadowViewRegistry[tag];
-    if (shadowView == nil) {
-      RCTLogWarn(@"Could not locate shadow view with tag #%@, this is probably caused by a temporary inconsistency between native views and shadow views.", tag);
-      return;
-    }
-
+  [self _executeBlockWithShadowView:^(RCTShadowView *shadowView) {
     shadowView.localData = localData;
     [self setNeedsLayout];
-  });
+  } forTag:view.reactTag];
 }
 
 /**
@@ -392,56 +399,40 @@ static NSDictionary *deviceOrientationEventBody(UIDeviceOrientation orientation)
 - (void)setSize:(CGSize)size forView:(UIView *)view
 {
   RCTAssertMainQueue();
-
-  NSNumber *reactTag = view.reactTag;
-  RCTExecuteOnUIManagerQueue(^{
-    RCTShadowView *shadowView = self->_shadowViewRegistry[reactTag];
-    RCTAssert(shadowView != nil, @"Could not locate shadow view with tag #%@", reactTag);
-
+  [self _executeBlockWithShadowView:^(RCTShadowView *shadowView) {
     if (CGSizeEqualToSize(size, shadowView.size)) {
       return;
     }
 
     shadowView.size = size;
     [self setNeedsLayout];
-  });
+  } forTag:view.reactTag];
 }
 
-- (void)setIntrinsicContentSize:(CGSize)size forView:(UIView *)view
+- (void)setIntrinsicContentSize:(CGSize)intrinsicContentSize forView:(UIView *)view
 {
   RCTAssertMainQueue();
-
-  NSNumber *reactTag = view.reactTag;
-  RCTExecuteOnUIManagerQueue(^{
-    RCTShadowView *shadowView = self->_shadowViewRegistry[reactTag];
-    if (shadowView == nil) {
-      RCTLogWarn(@"Could not locate shadow view with tag #%@, this is probably caused by a temporary inconsistency between native views and shadow views.", reactTag);
+  [self _executeBlockWithShadowView:^(RCTShadowView *shadowView) {
+    if (CGSizeEqualToSize(shadowView.intrinsicContentSize, intrinsicContentSize)) {
       return;
-    }    
-
-    if (!CGSizeEqualToSize(shadowView.intrinsicContentSize, size)) {
-      shadowView.intrinsicContentSize = size;
-      [self setNeedsLayout];
     }
-  });
+
+    shadowView.intrinsicContentSize = intrinsicContentSize;
+  } forTag:view.reactTag];
 }
 
 - (void)setBackgroundColor:(UIColor *)color forView:(UIView *)view
 {
   RCTAssertMainQueue();
-
-  NSNumber *reactTag = view.reactTag;
-  RCTExecuteOnUIManagerQueue(^{
+  [self _executeBlockWithShadowView:^(RCTShadowView *shadowView) {
     if (!self->_viewRegistry) {
       return;
     }
 
-    RCTShadowView *shadowView = self->_shadowViewRegistry[reactTag];
-    RCTAssert(shadowView != nil, @"Could not locate root view with tag #%@", reactTag);
     shadowView.backgroundColor = color;
     [self _amendPendingUIBlocksWithStylePropagationUpdateForShadowView:shadowView];
-    [self flushUIBlocks];
-  });
+    [self flushUIBlocksWithCompletion:^{}];
+  } forTag:view.reactTag];
 }
 
 /**
@@ -1092,13 +1083,6 @@ RCT_EXPORT_METHOD(dispatchViewManagerCommand:(nonnull NSNumber *)reactTag
   [method invokeWithBridge:_bridge module:componentData.manager arguments:args];
 }
 
-- (void)partialBatchDidFlush
-{
-  if (self.unsafeFlushUIChangesBeforeBatchEnds) {
-    [self flushUIBlocks];
-  }
-}
-
 - (void)batchDidComplete
 {
   [self _layoutAndMount];
@@ -1142,12 +1126,14 @@ RCT_EXPORT_METHOD(dispatchViewManagerCommand:(nonnull NSNumber *)reactTag
     }
   }];
 
-  [_observerCoordinator uiManagerWillFlushUIBlocks:self];
+  [_observerCoordinator uiManagerWillPerformMounting:self];
 
-  [self flushUIBlocks];
+  [self flushUIBlocksWithCompletion:^{
+    [self->_observerCoordinator uiManagerDidPerformMounting:self];
+  }];
 }
 
-- (void)flushUIBlocks
+- (void)flushUIBlocksWithCompletion:(void (^)(void))completion;
 {
   RCTAssertUIManagerQueue();
 
@@ -1157,25 +1143,30 @@ RCT_EXPORT_METHOD(dispatchViewManagerCommand:(nonnull NSNumber *)reactTag
   NSArray<RCTViewManagerUIBlock> *previousPendingUIBlocks = _pendingUIBlocks;
   _pendingUIBlocks = [NSMutableArray new];
 
-  if (previousPendingUIBlocks.count) {
-    // Execute the previously queued UI blocks
-    RCTProfileBeginFlowEvent();
-    RCTExecuteOnMainQueue(^{
-      RCTProfileEndFlowEvent();
-      RCT_PROFILE_BEGIN_EVENT(RCTProfileTagAlways, @"-[UIManager flushUIBlocks]", (@{
-        @"count": [@(previousPendingUIBlocks.count) stringValue],
-      }));
-      @try {
-        for (RCTViewManagerUIBlock block in previousPendingUIBlocks) {
-          block(self, self->_viewRegistry);
-        }
-      }
-      @catch (NSException *exception) {
-        RCTLogError(@"Exception thrown while executing UI block: %@", exception);
-      }
-      RCT_PROFILE_END_EVENT(RCTProfileTagAlways, @"");
-    });
+  if (previousPendingUIBlocks.count == 0) {
+    completion();
+    return;
   }
+
+  // Execute the previously queued UI blocks
+  RCTProfileBeginFlowEvent();
+  RCTExecuteOnMainQueue(^{
+    RCTProfileEndFlowEvent();
+    RCT_PROFILE_BEGIN_EVENT(RCTProfileTagAlways, @"-[UIManager flushUIBlocks]", (@{
+      @"count": [@(previousPendingUIBlocks.count) stringValue],
+    }));
+    @try {
+      for (RCTViewManagerUIBlock block in previousPendingUIBlocks) {
+        block(self, self->_viewRegistry);
+      }
+    }
+    @catch (NSException *exception) {
+      RCTLogError(@"Exception thrown while executing UI block: %@", exception);
+    }
+    RCT_PROFILE_END_EVENT(RCTProfileTagAlways, @"");
+
+    RCTExecuteOnUIManagerQueue(completion);
+  });
 }
 
 - (void)setNeedsLayout
