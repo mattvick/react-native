@@ -19,7 +19,7 @@ const NativeModules = require('NativeModules');
 
 import type { ResolvedAssetSource } from 'AssetSourceResolver';
 
-let _customSourceTransformer, _serverURL, _scriptURL, _embeddedBundleURL;
+let _customSourceTransformer, _serverURL, _scriptURL;
 
 function getDevServerURL(): ?string {
   if (_serverURL === undefined) {
@@ -43,7 +43,7 @@ function _coerceLocalScriptURL(scriptURL: ?string): ?string {
       return null;
     }
     scriptURL = scriptURL.substring(0, scriptURL.lastIndexOf('/') + 1);
-    if (!scriptURL.startsWith('file://')) {
+    if (!scriptURL.includes('://')) {
       // Add file protocol in case we have an absolute file path and not a URL.
       // This shouldn't really be necessary. scriptURL should be a URL.
       scriptURL = 'file://' + scriptURL;
@@ -58,14 +58,6 @@ function getScriptURL(): ?string {
     _scriptURL = _coerceLocalScriptURL(scriptURL);
   }
   return _scriptURL;
-}
-
-function getEmbeddedBundledURL(): ?string {
-  if (_embeddedBundleURL === undefined) {
-    const scriptURL = NativeModules.SourceCode.embeddedBundleURL;
-    _embeddedBundleURL = _coerceLocalScriptURL(scriptURL);
-  }
-  return _embeddedBundleURL;
 }
 
 function setCustomSourceTransformer(
@@ -91,7 +83,6 @@ function resolveAssetSource(source: any): ?ResolvedAssetSource {
   const resolver = new AssetSourceResolver(
     getDevServerURL(),
     getScriptURL(),
-    getEmbeddedBundledURL(),
     asset,
   );
   if (_customSourceTransformer) {
