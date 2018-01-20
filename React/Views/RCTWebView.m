@@ -532,9 +532,9 @@ createWebViewWithConfiguration:(__unused WKWebViewConfiguration *)configuration
 {
   // Override the action if opening a new webView, signaled by the navigationAction having a nil
   // or non-mainFrame targetFrame.
-  // if (!navigationAction.targetFrame.isMainFrame) {
+  if (!navigationAction.targetFrame.isMainFrame) {
     [webView loadRequest:navigationAction.request];
-  // }
+  }
 
   return nil;
 }
